@@ -1,0 +1,851 @@
+cheezorbit = true
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local PhysicsService = game:GetService("PhysicsService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+if CoreGui:FindFirstChild("cheezorbit") then
+    CoreGui.cheezorbit:Destroy()
+end
+
+local ORBIT_GROUP = "W7S_OrbitGroup"
+pcall(function()
+    PhysicsService:RegisterCollisionGroup(ORBIT_GROUP)
+    PhysicsService:CollisionGroupSetCollidable(ORBIT_GROUP, ORBIT_GROUP, false)
+end)
+
+local Config = {
+    Active = false,
+    Type = "Ring",
+    Radius = 25,
+    Speed = 6,
+    OffsetX = 0,
+    OffsetY = 4,
+    OffsetZ = 0,
+    AngleX = 0,
+    AngleY = 0,
+    AngleZ = 0,
+    MaxDistance = 2500,
+    AntiFling = true,
+    TargetMode = false,
+    SelectedTarget = nil,
+    CustomPivot = false,
+    PivotPos = Vector3.new(0, 0, 0),
+    DiceCombatActive = false
+}
+
+local angleTime = 0
+local trackedParts = {}
+local validPhysicsObjects = {}
+local candidateParts = {}
+local networkAttempted = setmetatable({}, { __mode = "k" })
+local antiFlingApplied = setmetatable({}, { __mode = "k" })
+local localCube = nil
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "cheezorbit"
+ScreenGui.Parent = CoreGui
+ScreenGui.ResetOnSpawn = false
+
+local MasterFrame = Instance.new("Frame")
+MasterFrame.Size = UDim2.new(0, 440, 0, 320)
+MasterFrame.Position = UDim2.new(0.3, 0, 0.25, 0)
+MasterFrame.BackgroundTransparency = 1
+MasterFrame.Active = true
+MasterFrame.Parent = ScreenGui
+
+local function makeDraggable(frame, dragHandle)
+    local dragging, dragInput, dragStart, startPos
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    dragHandle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+local RemoveCubeGui = Instance.new("Frame")
+RemoveCubeGui.Name = "RemoveCubeContainer"
+RemoveCubeGui.Size = UDim2.new(0, 120, 0, 40)
+RemoveCubeGui.Position = UDim2.new(0.1, 0, 0.1, 0)
+RemoveCubeGui.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+RemoveCubeGui.Active = true
+RemoveCubeGui.Visible = false
+RemoveCubeGui.Parent = ScreenGui
+Instance.new("UICorner", RemoveCubeGui).CornerRadius = UDim.new(0, 6)
+
+local RemoveCubeBtn = Instance.new("TextButton")
+RemoveCubeBtn.Size = UDim2.new(1, 0, 1, 0)
+RemoveCubeBtn.BackgroundTransparency = 1
+RemoveCubeBtn.Text = "Remove Cube"
+RemoveCubeBtn.TextColor3 = Color3.fromRGB(255, 60, 60)
+RemoveCubeBtn.Font = Enum.Font.SourceSansBold
+RemoveCubeBtn.TextSize = 14
+RemoveCubeBtn.Parent = RemoveCubeGui
+
+makeDraggable(RemoveCubeGui, RemoveCubeBtn)
+
+RemoveCubeBtn.MouseButton1Click:Connect(function()
+    Config.CustomPivot = false
+    if localCube then
+        localCube:Destroy()
+        localCube = nil
+    end
+    RemoveCubeGui.Visible = false
+end)
+
+local SidebarFrame = Instance.new("Frame")
+SidebarFrame.Size = UDim2.new(0, 65, 1, 0)
+SidebarFrame.Position = UDim2.new(0, 0, 0, 0)
+SidebarFrame.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+SidebarFrame.BorderSizePixel = 0
+SidebarFrame.Parent = MasterFrame
+local SideTitle = Instance.new("TextLabel")
+SideTitle.Size = UDim2.new(1, 0, 0, 35)
+SideTitle.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+SideTitle.Text = "Orbit"
+SideTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+SideTitle.Font = Enum.Font.SourceSansBold
+SideTitle.TextSize = 16
+SideTitle.Parent = SidebarFrame
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 375, 1, 0)
+MainFrame.Position = UDim2.new(0, 65, 0, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = MasterFrame
+
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 35)
+TopBar.BackgroundColor3 = Color3.fromRGB(33, 33, 33)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local TabsToggleBtn = Instance.new("TextButton")
+TabsToggleBtn.Size = UDim2.new(0, 60, 1, 0)
+TabsToggleBtn.Position = UDim2.new(0, 12, 0, 0)
+TabsToggleBtn.BackgroundTransparency = 1
+TabsToggleBtn.Text = "TABS"
+TabsToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+TabsToggleBtn.Font = Enum.Font.SourceSansBold
+TabsToggleBtn.TextSize = 16
+TabsToggleBtn.TextXAlignment = Enum.TextXAlignment.Left
+TabsToggleBtn.Parent = TopBar
+
+local tabsVisible = true
+TabsToggleBtn.MouseButton1Click:Connect(function()
+    tabsVisible = not tabsVisible
+    SidebarFrame.Visible = tabsVisible
+    MainFrame.Position = tabsVisible and UDim2.new(0, 65, 0, 0) or UDim2.new(0, 0, 0, 0)
+end)
+
+makeDraggable(MasterFrame, TopBar)
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 25)
+CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.SourceSansBold
+CloseBtn.TextSize = 14
+CloseBtn.Parent = TopBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 4)
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 30, 0, 25)
+MinimizeBtn.Position = UDim2.new(1, -70, 0, 5)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+MinimizeBtn.Text = "_"
+MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeBtn.Font = Enum.Font.SourceSansBold
+MinimizeBtn.TextSize = 14
+MinimizeBtn.Parent = TopBar
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 4)
+
+local isMinimized = false
+local ContentContainer = Instance.new("Frame")
+ContentContainer.Size = UDim2.new(1, 0, 1, -35)
+ContentContainer.Position = UDim2.new(0, 0, 0, 35)
+ContentContainer.BackgroundTransparency = 1
+ContentContainer.Parent = MainFrame
+
+local function createSideTab(posIndex, text)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -12, 0, 45)
+    btn.Position = UDim2.new(0, 6, 0, 45 + (posIndex * 52))
+    btn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(160, 160, 160)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 12
+    btn.BorderSizePixel = 0
+    btn.Parent = SidebarFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    return btn
+end
+
+local OrbitTab = createSideTab(0, "Orbit")
+local MiscTab = createSideTab(1, "Misc")
+
+local OrbitPage = Instance.new("Frame")
+OrbitPage.Size = UDim2.new(1, 0, 1, 0)
+OrbitPage.BackgroundTransparency = 1
+OrbitPage.Visible = true
+OrbitPage.Parent = ContentContainer
+
+local MiscPage = Instance.new("Frame")
+MiscPage.Size = UDim2.new(1, 0, 1, 0)
+MiscPage.BackgroundTransparency = 1
+MiscPage.Visible = false
+MiscPage.Parent = ContentContainer
+local function switchTab(showPage, activeTab)
+    OrbitPage.Visible = (showPage == OrbitPage)
+    MiscPage.Visible = (showPage == MiscPage)
+    OrbitTab.TextColor3 = Color3.fromRGB(160, 160, 160)
+    MiscTab.TextColor3 = Color3.fromRGB(160, 160, 160)
+    activeTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+end
+OrbitTab.MouseButton1Click:Connect(function() switchTab(OrbitPage, OrbitTab) end)
+MiscTab.MouseButton1Click:Connect(function() switchTab(MiscPage, MiscTab) end)
+
+MinimizeBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    ContentContainer.Visible = not isMinimized
+    SidebarFrame.Visible = (not isMinimized and tabsVisible)
+    MainFrame.Size = isMinimized and UDim2.new(0, 375, 0, 35) or UDim2.new(0, 375, 0, 320)
+    SidebarFrame.Size = isMinimized and UDim2.new(0, 65, 0, 35) or UDim2.new(0, 65, 0, 320)
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    Config.Active = false
+    if localCube then localCube:Destroy() end
+    ScreenGui:Destroy()
+end)
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0, 110, 0, 32)
+ToggleBtn.Position = UDim2.new(0, 12, 0, 12)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+ToggleBtn.Text = "ORBIT: OFF"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.SourceSansBold
+ToggleBtn.TextSize = 14
+ToggleBtn.Parent = OrbitPage
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 4)
+
+local TargetFrame = Instance.new("Frame")
+TargetFrame.Size = UDim2.new(0, 125, 0, 32)
+TargetFrame.Position = UDim2.new(0, 130, 0, 12)
+TargetFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+TargetFrame.ZIndex = 5
+TargetFrame.Parent = OrbitPage
+Instance.new("UICorner", TargetFrame).CornerRadius = UDim.new(0, 4)
+local TargetLabelBtn = Instance.new("TextButton")
+TargetLabelBtn.Size = UDim2.new(0, 75, 1, 0)
+TargetLabelBtn.Position = UDim2.new(0, 4, 0, 0)
+TargetLabelBtn.BackgroundTransparency = 1
+TargetLabelBtn.Text = "TARGET v"
+TargetLabelBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+TargetLabelBtn.Font = Enum.Font.SourceSansBold
+TargetLabelBtn.TextSize = 13
+TargetLabelBtn.ZIndex = 6
+TargetLabelBtn.Parent = TargetFrame
+
+local TargetStatusBtn = Instance.new("TextButton")
+TargetStatusBtn.Size = UDim2.new(0, 40, 1, -8)
+TargetStatusBtn.Position = UDim2.new(1, -44, 0, 4)
+TargetStatusBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+TargetStatusBtn.Text = "OFF"
+TargetStatusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetStatusBtn.Font = Enum.Font.SourceSansBold
+TargetStatusBtn.TextSize = 12
+TargetStatusBtn.ZIndex = 6
+TargetStatusBtn.Parent = TargetFrame
+Instance.new("UICorner", TargetStatusBtn).CornerRadius = UDim.new(0, 3)
+
+local DropdownScroll = Instance.new("ScrollingFrame")
+DropdownScroll.Size = UDim2.new(1, 0, 0, 120)
+DropdownScroll.Position = UDim2.new(0, 0, 1, 4)
+DropdownScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+DropdownScroll.BorderSizePixel = 0
+DropdownScroll.Visible = false
+DropdownScroll.ScrollBarThickness = 4
+DropdownScroll.ZIndex = 10
+DropdownScroll.Parent = TargetFrame
+Instance.new("UICorner", DropdownScroll).CornerRadius = UDim.new(0, 4)
+
+local DropdownList = Instance.new("UIListLayout")
+DropdownList.SortOrder = Enum.SortOrder.LayoutOrder
+DropdownList.Parent = DropdownScroll
+
+local function updateDropdownList()
+    for _, child in ipairs(DropdownScroll:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    local allPlayers = Players:GetPlayers()
+    DropdownScroll.CanvasSize = UDim2.new(0, 0, 0, #allPlayers * 25)
+    for _, p in ipairs(allPlayers) do
+        local pBtn = Instance.new("TextButton")
+        pBtn.Size = UDim2.new(1, 0, 0, 25)
+        pBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+        pBtn.BorderSizePixel = 0
+        pBtn.Text = p.Name
+        pBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+        pBtn.Font = Enum.Font.SourceSans
+        pBtn.TextSize = 12
+        pBtn.ZIndex = 11
+        pBtn.Parent = DropdownScroll
+        pBtn.MouseButton1Click:Connect(function()
+            Config.SelectedTarget = p
+            TargetLabelBtn.Text = p.Name:sub(1, 8) .. " v"
+            DropdownScroll.Visible = false
+        end)
+    end
+end
+
+TargetLabelBtn.MouseButton1Click:Connect(function()
+    DropdownScroll.Visible = not DropdownScroll.Visible
+    if DropdownScroll.Visible then updateDropdownList() end
+end)
+
+TargetStatusBtn.MouseButton1Click:Connect(function()
+    Config.TargetMode = not Config.TargetMode
+    TargetStatusBtn.Text = Config.TargetMode and "ON" or "OFF"
+    TargetStatusBtn.BackgroundColor3 = Config.TargetMode and Color3.fromRGB(40, 140, 40) or Color3.fromRGB(45, 45, 45)
+end)
+
+local StudBox = Instance.new("Frame")
+StudBox.Size = UDim2.new(0, 110, 0, 105)
+StudBox.Position = UDim2.new(0, 12, 0, 55)
+StudBox.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+StudBox.BorderSizePixel = 0
+StudBox.Parent = OrbitPage
+Instance.new("UICorner", StudBox).CornerRadius = UDim.new(0, 4)
+local function buildStudRow(axisLabel, defaultValue, posY, updateFunc)
+    local box = Instance.new("TextBox", StudBox)
+    box.Size = UDim2.new(0, 45, 0, 22)
+    box.Position = UDim2.new(0, 6, 0, posY)
+    box.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    box.Text = tostring(defaultValue)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSansBold
+    box.TextSize = 12
+    box.ClearTextOnFocus = false
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 3)
+    local lbl = Instance.new("TextLabel", StudBox)
+    lbl.Size = UDim2.new(0, 15, 0, 22)
+    lbl.Position = UDim2.new(0, 54, 0, posY)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = axisLabel
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.TextSize = 13
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then updateFunc(n) else box.Text = tostring(defaultValue) end
+    end)
+end
+buildStudRow("X", 0, 10, function(v) Config.OffsetX = v end)
+buildStudRow("Y", 4, 40, function(v) Config.OffsetY = v end)
+buildStudRow("Z", 0, 70, function(v) Config.OffsetZ = v end)
+
+local AngleBox = Instance.new("Frame")
+AngleBox.Size = UDim2.new(0, 110, 0, 105)
+AngleBox.Position = UDim2.new(0, 12, 0, 170)
+AngleBox.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+AngleBox.BorderSizePixel = 0
+AngleBox.Parent = OrbitPage
+Instance.new("UICorner", AngleBox).CornerRadius = UDim.new(0, 4)
+
+local function buildAngleRow(axisLabel, posY, updateFunc)
+    local box = Instance.new("TextBox", AngleBox)
+    box.Size = UDim2.new(0, 45, 0, 22)
+    box.Position = UDim2.new(0, 6, 0, posY)
+    box.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    box.Text = "0"
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSansBold
+    box.TextSize = 12
+    box.ClearTextOnFocus = false
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 3)
+    local lbl = Instance.new("TextLabel", AngleBox)
+    lbl.Size = UDim2.new(0, 50, 0, 22)
+    lbl.Position = UDim2.new(0, 54, 0, posY)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = axisLabel .. " angle"
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+    lbl.Font = Enum.Font.SourceSans
+    lbl.TextSize = 11
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then updateFunc(math.rad(n)) else box.Text = "0" end
+    end)
+end
+buildAngleRow("X", 10, function(v) Config.AngleX = v end)
+buildAngleRow("Y", 40, function(v) Config.AngleY = v end)
+buildAngleRow("Z", 70, function(v) Config.AngleZ = v end)
+
+local DynamicsBox = Instance.new("Frame")
+DynamicsBox.Size = UDim2.new(0, 125, 0, 105)
+DynamicsBox.Position = UDim2.new(0, 130, 0, 55)
+DynamicsBox.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+DynamicsBox.BorderSizePixel = 0
+DynamicsBox.Parent = OrbitPage
+Instance.new("UICorner", DynamicsBox).CornerRadius = UDim.new(0, 4)
+
+local function buildDynamicRow(labelText, defaultVal, posY, updateFunc)
+    local box = Instance.new("TextBox", DynamicsBox)
+    box.Size = UDim2.new(0, 45, 0, 32)
+    box.Position = UDim2.new(0, 8, 0, posY)
+    box.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    box.Text = tostring(defaultVal)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSansBold
+    box.TextSize = 13
+    box.ClearTextOnFocus = false
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
+    local lbl = Instance.new("TextLabel", DynamicsBox)
+    lbl.Size = UDim2.new(0, 60, 0, 32)
+    lbl.Position = UDim2.new(0, 58, 0, posY)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lbl.Font = Enum.Font.SourceSans
+    lbl.TextSize = 11
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then updateFunc(n) else box.Text = tostring(defaultVal) end
+    end)
+end
+buildDynamicRow("orbit distance", 25, 12, function(v) Config.Radius = v end)
+buildDynamicRow("orbit speed", 6, 58, function(v) Config.Speed = v end)
+
+local AntiFlingBtn = Instance.new("TextButton")
+AntiFlingBtn.Size = UDim2.new(0, 125, 0, 26)
+AntiFlingBtn.Position = UDim2.new(0, 130, 0, 170)
+AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(40, 140, 40)
+AntiFlingBtn.Text = "Anti-Fling: On"
+AntiFlingBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AntiFlingBtn.Font = Enum.Font.SourceSansBold
+AntiFlingBtn.TextSize = 12
+AntiFlingBtn.Parent = OrbitPage
+Instance.new("UICorner", AntiFlingBtn).CornerRadius = UDim.new(0, 4)
+
+AntiFlingBtn.MouseButton1Click:Connect(function()
+    Config.AntiFling = not Config.AntiFling
+    AntiFlingBtn.Text = Config.AntiFling and "Anti-Fling: On" or "Anti-Fling: Off"
+    AntiFlingBtn.BackgroundColor3 = Config.AntiFling and Color3.fromRGB(40, 140, 40) or Color3.fromRGB(150, 40, 40)
+end)
+
+local ShapesBox = Instance.new("Frame")
+ShapesBox.Size = UDim2.new(0, 100, 0, 263)
+ShapesBox.Position = UDim2.new(1, -112, 0, 12)
+ShapesBox.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+ShapesBox.BorderSizePixel = 0
+ShapesBox.Parent = OrbitPage
+Instance.new("UICorner", ShapesBox).CornerRadius = UDim.new(0, 4)
+
+local function buildShapeBtn(name, posY)
+    local btn = Instance.new("TextButton", ShapesBox)
+    btn.Size = UDim2.new(1, -12, 0, 32)
+    btn.Position = UDim2.new(0, 6, 0, posY)
+    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 13
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    return btn
+end
+
+local RingBtn = buildShapeBtn("RING", 12)
+local WallBtn = buildShapeBtn("WALL", 50)
+local RoofBtn = buildShapeBtn("ROOF", 88)
+local TemplateBtn = buildShapeBtn("template", 126)
+
+local function updateTypeUI()
+    RingBtn.BackgroundColor3 = Config.Type == "Ring" and Color3.fromRGB(70, 75, 75) or Color3.fromRGB(45, 45, 45)
+    WallBtn.BackgroundColor3 = Config.Type == "Wall" and Color3.fromRGB(70, 75, 75) or Color3.fromRGB(45, 45, 45)
+    RoofBtn.BackgroundColor3 = Config.Type == "Roof" and Color3.fromRGB(70, 75, 75) or Color3.fromRGB(45, 45, 45)
+    TemplateBtn.BackgroundColor3 = Config.Type == "Template" and Color3.fromRGB(70, 75, 75) or Color3.fromRGB(45, 45, 45)
+end
+
+RingBtn.MouseButton1Click:Connect(function() Config.Type = "Ring" updateTypeUI() end)
+WallBtn.MouseButton1Click:Connect(function() Config.Type = "Wall" updateTypeUI() end)
+RoofBtn.MouseButton1Click:Connect(function() Config.Type = "Roof" updateTypeUI() end)
+TemplateBtn.MouseButton1Click:Connect(function() Config.Type = "Template" updateTypeUI() end)
+updateTypeUI()
+local ToolsContainer = Instance.new("Frame")
+ToolsContainer.Size = UDim2.new(0, 130, 0, 140)
+ToolsContainer.Position = UDim2.new(0, 12, 0, 12)
+ToolsContainer.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+ToolsContainer.Parent = MiscPage
+Instance.new("UICorner", ToolsContainer).CornerRadius = UDim.new(0, 4)
+
+local PositionToolBtn = Instance.new("TextButton")
+PositionToolBtn.Size = UDim2.new(1, -16, 0, 32)
+PositionToolBtn.Position = UDim2.new(0, 8, 0, 12)
+PositionToolBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+PositionToolBtn.Text = "Position Tool"
+PositionToolBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+PositionToolBtn.Font = Enum.Font.SourceSansBold
+PositionToolBtn.TextSize = 13
+PositionToolBtn.Parent = ToolsContainer
+Instance.new("UICorner", PositionToolBtn).CornerRadius = UDim.new(0, 4)
+
+local TeleportToolBtn = Instance.new("TextButton")
+TeleportToolBtn.Size = UDim2.new(1, -16, 0, 32)
+TeleportToolBtn.Position = UDim2.new(0, 8, 0, 52)
+TeleportToolBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+TeleportToolBtn.Text = "Teleport Tool"
+TeleportToolBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+TeleportToolBtn.Font = Enum.Font.SourceSansBold
+TeleportToolBtn.TextSize = 13
+TeleportToolBtn.Parent = ToolsContainer
+Instance.new("UICorner", TeleportToolBtn).CornerRadius = UDim.new(0, 4)
+local CombatContainer = Instance.new("Frame")
+CombatContainer.Size = UDim2.new(0, 205, 0, 263)
+CombatContainer.Position = UDim2.new(1, -217, 0, 12)
+CombatContainer.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+CombatContainer.Parent = MiscPage
+Instance.new("UICorner", CombatContainer).CornerRadius = UDim.new(0, 4)
+
+local CombatHeader = Instance.new("TextLabel")
+CombatHeader.Size = UDim2.new(1, 0, 0, 25)
+CombatHeader.BackgroundTransparency = 1
+CombatHeader.Text = "Combat"
+CombatHeader.TextColor3 = Color3.fromRGB(180, 40, 40)
+CombatHeader.Font = Enum.Font.SourceSansBold
+CombatHeader.TextSize = 13
+CombatHeader.Parent = CombatContainer
+
+local DiceCombatBtn = Instance.new("TextButton")
+DiceCombatBtn.Size = UDim2.new(0, 75, 0, 32)
+DiceCombatBtn.Position = UDim2.new(0, 12, 0, 35)
+DiceCombatBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+DiceCombatBtn.Text = "Dice"
+DiceCombatBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+DiceCombatBtn.Font = Enum.Font.SourceSansBold
+DiceCombatBtn.TextSize = 13
+DiceCombatBtn.Parent = CombatContainer
+Instance.new("UICorner", DiceCombatBtn).CornerRadius = UDim.new(0, 4)
+PositionToolBtn.MouseButton1Click:Connect(function()
+    local t = Instance.new("Tool")
+    t.Name = "Position Tool"
+    t.RequiresHandle = false
+    t.Activated:Connect(function()
+        local m = LocalPlayer:GetMouse()
+        if m then
+            Config.PivotPos = m.Hit.Position
+            Config.CustomPivot = true
+            if not localCube or not localCube.Parent then
+                localCube = Instance.new("Part")
+                localCube.Size = Vector3.new(2, 2, 2)
+                localCube.Color = Color3.fromRGB(255, 0, 0)
+                localCube.Transparency = 0.5
+                localCube.Anchored = true
+                localCube.CanCollide = false
+                localCube.Name = "CheezOrbit_LocalPivot"
+                localCube.Parent = workspace
+            end
+            localCube.Position = Config.PivotPos
+            RemoveCubeGui.Visible = true
+        end
+    end)
+    t.Parent = LocalPlayer:WaitForChild("Backpack")
+end)
+
+TeleportToolBtn.MouseButton1Click:Connect(function()
+    local t = Instance.new("Tool")
+    t.Name = "Teleport Tool"
+    t.RequiresHandle = false
+    t.Activated:Connect(function()
+        local m = LocalPlayer:GetMouse()
+        if m and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(m.Hit.Position + Vector3.new(0, 3, 0))
+        end
+    end)
+    t.Parent = LocalPlayer:WaitForChild("Backpack")
+end)
+
+DiceCombatBtn.MouseButton1Click:Connect(function()
+    Config.DiceCombatActive = not Config.DiceCombatActive
+    DiceCombatBtn.BackgroundColor3 = Config.DiceCombatActive and Color3.fromRGB(40, 140, 40) or Color3.fromRGB(45, 45, 45)
+end)
+local function releaseParts()
+    for part, oldGroup in pairs(trackedParts) do
+        if part and part:IsA("BasePart") then
+            pcall(function()
+                part.AssemblyLinearVelocity = Vector3.new(0, -5, 0)
+                part.AssemblyAngularVelocity = Vector3.zero
+                if sethiddenproperty then
+                    sethiddenproperty(part, "CollisionGroupId", oldGroup)
+                end
+            end)
+        end
+    end
+    table.clear(trackedParts)
+    table.clear(antiFlingApplied)
+end
+
+local function isOrbitCandidate(obj)
+    if not obj or not obj:IsA("BasePart") or obj.Anchored then
+        return false
+    end
+
+    local character = LocalPlayer.Character
+    if character and obj:IsDescendantOf(character) then
+        return false
+    end
+
+    local model = obj:FindFirstAncestorOfClass("Model")
+    if model and (model:FindFirstChildOfClass("Humanoid") or model:FindFirstChild("HumanoidRootPart")) then
+        return false
+    end
+
+    local assemblyRoot = obj.AssemblyRootPart
+    return assemblyRoot ~= nil and not assemblyRoot.Anchored
+end
+
+-- Track additions/removals instead of rescanning the entire Workspace repeatedly.
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if isOrbitCandidate(obj) then
+        candidateParts[obj] = true
+    end
+end
+
+workspace.DescendantAdded:Connect(function(obj)
+    if isOrbitCandidate(obj) then
+        candidateParts[obj] = true
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(obj)
+    candidateParts[obj] = nil
+    trackedParts[obj] = nil
+    networkAttempted[obj] = nil
+    antiFlingApplied[obj] = nil
+end)
+
+local function getOrbitRoot()
+    local targetCharacter = LocalPlayer.Character
+    if Config.TargetMode and Config.SelectedTarget then
+        local targetPlayer = Config.SelectedTarget
+        if targetPlayer and targetPlayer.Character then
+            targetCharacter = targetPlayer.Character
+        end
+    end
+    return targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+end
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Config.Active = not Config.Active
+    if Config.Active then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 140, 40)
+        ToggleBtn.Text = "ORBIT: ON"
+    else
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+        ToggleBtn.Text = "ORBIT: OFF"
+        releaseParts()
+        table.clear(validPhysicsObjects)
+    end
+end)
+
+-- Refresh the nearby list a few times per second. New parts are event-tracked.
+task.spawn(function()
+    while ScreenGui and ScreenGui.Parent do
+        task.wait(0.4)
+
+        if Config.Active then
+            local rootPart = getOrbitRoot()
+            if rootPart then
+                local nearby = {}
+                local origin = rootPart.Position
+                local maxDistanceSquared = Config.MaxDistance * Config.MaxDistance
+
+                for part in pairs(candidateParts) do
+                    if part and part.Parent and isOrbitCandidate(part) then
+                        local offset = part.Position - origin
+                        if offset:Dot(offset) <= maxDistanceSquared then
+                            nearby[#nearby + 1] = part
+
+                            -- Attempt ownership only once per part, not on every refresh.
+                            if not networkAttempted[part] then
+                                networkAttempted[part] = true
+                                if sethiddenproperty then
+                                    pcall(sethiddenproperty, part, "NetworkIsSleeping", false)
+                                end
+                                if part.SetNetworkOwner then
+                                    pcall(function()
+                                        part:SetNetworkOwner(LocalPlayer)
+                                    end)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                validPhysicsObjects = nearby
+            end
+        else
+            table.clear(validPhysicsObjects)
+        end
+    end
+end)
+
+-- Cap the physics-update work to 30 updates per second rather than every frame.
+local updateAccumulator = 0
+local UPDATE_INTERVAL = 1 / 30
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    if not Config.Active then
+        updateAccumulator = 0
+        return
+    end
+
+    updateAccumulator += deltaTime
+    if updateAccumulator < UPDATE_INTERVAL then
+        return
+    end
+    local step = updateAccumulator
+    updateAccumulator = 0
+
+    local rootPart = getOrbitRoot()
+    if not rootPart then return end
+
+    angleTime += Config.Speed * step
+    local rotationCFrame = CFrame.fromEulerAnglesXYZ(Config.AngleX, Config.AngleY, Config.AngleZ)
+
+    local basePivot = rootPart.Position + Vector3.new(Config.OffsetX, Config.OffsetY, Config.OffsetZ)
+    if Config.CustomPivot then
+        basePivot = Config.PivotPos + Vector3.new(Config.OffsetX, Config.OffsetY, Config.OffsetZ)
+    end
+
+    local totalParts = #validPhysicsObjects
+    if totalParts == 0 then return end
+
+    local characterCFrame = rootPart.CFrame
+    local diceSideSize = math.ceil(math.sqrt(totalParts))
+    local roofLayers = math.max(1, math.ceil(totalParts / 6))
+    local roofRadiusScale = Config.Radius / roofLayers
+    local wallLeftShift = (4 * 4) / 2
+
+    for index = 1, totalParts do
+        local part = validPhysicsObjects[index]
+        if not part or not part.Parent or part.Anchored then
+            continue
+        end
+
+        local targetPosition
+
+        if Config.DiceCombatActive then
+            local col = (index - 1) % diceSideSize
+            local row = math.floor((index - 1) / diceSideSize)
+            local localOffset = Vector3.new(
+                (col - (diceSideSize - 1) / 2) * 4,
+                0,
+                (row - (diceSideSize - 1) / 2) * 4
+            )
+            targetPosition = basePivot + characterCFrame:VectorToWorldSpace(localOffset)
+
+        elseif Config.Type == "Ring" then
+            local sliceAngle = angleTime + (index * (math.pi * 2 / totalParts))
+            local localOffset = Vector3.new(
+                math.cos(sliceAngle) * Config.Radius,
+                0,
+                math.sin(sliceAngle) * Config.Radius
+            )
+            targetPosition = basePivot + rotationCFrame:VectorToWorldSpace(localOffset)
+
+        elseif Config.Type == "Roof" then
+            local layer = math.ceil(index / 6)
+            local itemInLayer = (index - 1) % 6
+            local sliceAngle = angleTime + (itemInLayer * (math.pi * 2 / 6))
+            local dynamicRadius = layer * roofRadiusScale
+            local localOffset = Vector3.new(
+                math.cos(sliceAngle) * dynamicRadius,
+                layer * 0.1,
+                math.sin(sliceAngle) * dynamicRadius
+            )
+            targetPosition = basePivot + rotationCFrame:VectorToWorldSpace(localOffset)
+
+        elseif Config.Type == "Wall" then
+            local partsPerColumn = 5
+            local columnIndex = (index - 1) % partsPerColumn
+            local rowIndex = math.floor((index - 1) / partsPerColumn)
+            local localRightDistance = (columnIndex * 4) - wallLeftShift
+            local localOffset = Vector3.new(
+                localRightDistance,
+                (rowIndex * 4) - 4,
+                -Config.Radius
+            )
+            targetPosition = basePivot + characterCFrame:VectorToWorldSpace(localOffset)
+
+        else
+            local sliceAngle = angleTime + (index * (math.pi * 2 / totalParts))
+            targetPosition = basePivot + Vector3.new(
+                math.cos(sliceAngle) * Config.Radius,
+                0,
+                math.sin(sliceAngle) * Config.Radius
+            )
+        end
+
+        -- Cache the original collision group once; only update when the toggle changes.
+        if sethiddenproperty then
+            if trackedParts[part] == nil then
+                local oldGroup = 0
+                if gethiddenproperty then
+                    local ok, result = pcall(gethiddenproperty, part, "CollisionGroupId")
+                    if ok and result ~= nil then
+                        oldGroup = result
+                    end
+                end
+                trackedParts[part] = oldGroup
+            end
+
+            if antiFlingApplied[part] ~= Config.AntiFling then
+                local groupToApply = Config.AntiFling and ORBIT_GROUP or trackedParts[part]
+                pcall(sethiddenproperty, part, "CollisionGroupId", groupToApply)
+                antiFlingApplied[part] = Config.AntiFling
+            end
+        else
+            trackedParts[part] = 0
+        end
+
+        local direction = targetPosition - part.Position
+        local distance = direction.Magnitude
+        local targetVelocity = Vector3.zero
+
+        if distance >= 0.5 then
+            local speedScale = math.clamp(distance * 12, 10, 200)
+            targetVelocity = direction * (speedScale / distance)
+        end
+
+        local currentVelocity = part.AssemblyLinearVelocity
+        part.AssemblyLinearVelocity = currentVelocity + ((targetVelocity - currentVelocity) * 0.45)
+
+        if Config.DiceCombatActive or (Config.Type ~= "Ring" and Config.Type ~= "Roof") then
+            part.AssemblyAngularVelocity = Vector3.zero
+        else
+            part.AssemblyAngularVelocity = Vector3.new(0, 12, 0)
+        end
+    end
+end)
